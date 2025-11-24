@@ -48,6 +48,7 @@ from apx.cli.dev.process_cleanup import (
 
 # note: header name must be lowercase and with - symbols
 ACCESS_TOKEN_HEADER_NAME = "x-forwarded-access-token"
+FORWARDED_USER_HEADER_NAME = "x-forwarded-user"
 
 
 # === Port Finding Utilities ===
@@ -561,6 +562,27 @@ async def run_backend(
 
                 # Load/reload the app instance (fully reload modules on hot reload)
                 app_instance = load_app(app_module_name, reload_modules=not first_run)
+
+                ws = WorkspaceClient(product="apx/dev", product_version=__version__)
+                user_id = ws.current_user.me().id
+                assert user_id is not None, "User ID is not set"
+                try:
+                    # heuristic to get workspace id from host
+                    workspace_id = ws.config.host.split("-")[1].split(".")[0]
+                except Exception:
+                    workspace_id = "placeholder"
+
+                async def user_id_middleware(request: Request, call_next):
+                    user_id_header: tuple[bytes, bytes] = (
+                        FORWARDED_USER_HEADER_NAME.encode(),
+                        f"{user_id}@{workspace_id}".encode(),
+                    )
+                    request.headers.__dict__["_list"].append(user_id_header)
+                    return await call_next(request)
+
+                app_instance.add_middleware(
+                    BaseHTTPMiddleware, dispatch=user_id_middleware
+                )
 
                 # Add OBO middleware if enabled
                 if obo and obo_token:
